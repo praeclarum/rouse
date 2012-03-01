@@ -29,7 +29,7 @@ function startServer(path, callback)
 {
   var server = new rouse.createServer(path);
   server.listen(options.port, options.hostname, function() {
-    console.log("Running " + path + " at http://" + options.address + ":" + options.port + "/");
+    console.log("Running " + path + " at http://" + options.hostname + ":" + options.port + "/");
     callback(server);
   });
 }

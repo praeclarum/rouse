@@ -1,12 +1,14 @@
 {
-  "helloworld": {
-    "content": [
-      {
-        "type": "text/html",
-        "content": "Hello, World!"
-      }
-    ]
-  }
+  types: [
+    {
+      name: "HelloWorld",
+    }
+  ],
+  
+  resources: [
+    {
+      type: "HelloWorld",
+    }  
+  ],
 }
-
 
