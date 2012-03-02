@@ -1,16 +1,21 @@
 {
-  types: [
-    {
-      name: "Entry",
+  schema: {
+    "Comment": {
+      title: String,
+      body: String,
     },
-    {
-      name: "Comment",
+    
+    "Entry": {
+      title: String,
+      bodyHtml: String,
+      publishDate: Date,
     }
-  ],
+  }
   
   resources: [
     {
       name: "entries",
+      query: "select * from Comment where "
     }
   ]
 }

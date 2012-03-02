@@ -1,17 +1,19 @@
 {
-  types: [
+  schema: { 
+    "Photo":
     {
-      name: "Photo",
-      props: [
-        {
-          name: "DateTaken",
-          type: "DateTime"
-        },
-        {
-          name: "Content",
-          type: "blob"
-        }
-      ]
+      date: "Date",
+      content: "Blob",
+    },
+  }
+  
+  resources: {
+    
+    "GroupPhotos":
+    {
+      
     }
-  ]
+    
+  }
+  
 }

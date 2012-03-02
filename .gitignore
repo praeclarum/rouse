@@ -1,0 +1,6 @@
+.DS_Store
+*.pidb
+*.userprefs
+samples/Chat/bin/
+samples/Chat/obj/
+src/Rouse.Server/bin/
