@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
-using System.Threading.Tasks;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace Rouse.Data
 {
@@ -14,6 +14,8 @@ namespace Rouse.Data
 		readonly object _connectionLock = new object ();
 		
 		Collections _collections;
+		
+		public IDbConnection Connection { get { return _connection; } }
 		
 		public DataRepository (IDbConnection connection)
 		{
@@ -78,9 +80,15 @@ namespace Rouse.Data
 			{
 				List<T> r = new List<T>();
 				
+				if (_repo._connection.State != ConnectionState.Open) {
+					_repo._connection.Open ();
+				}
+				
+				var tableInfo = _repo.GetTableInfo (typeof (T));
+				
 				using (var cmd = _repo._connection.CreateCommand ()) {
 					
-					cmd.CommandText = SqlCommandText;
+					cmd.CommandText = GetSqlCommandText (tableInfo);
 					
 					foreach (var p in _params) {
 						var dbp = cmd.CreateParameter ();
@@ -89,13 +97,28 @@ namespace Rouse.Data
 						cmd.Parameters.Add (dbp);
 					}
 					
-					if (_repo._connection.State != ConnectionState.Open) {
-						_repo._connection.Open ();
-					}
-					
 					using (var reader = cmd.ExecuteReader ()) {
+						
+						object[] vals = null;
+						System.Reflection.PropertyInfo[] fields = null;
+						
 						while (reader.Read ()) {
-							Console.WriteLine (reader);
+							
+							if (vals == null) {
+								vals = new object [reader.FieldCount];
+								fields = new System.Reflection.PropertyInfo [vals.Length];
+								for (var i = 0; i < fields.Length; i++) {
+									var name = reader.GetName (i);
+									fields [i] = tableInfo.GetColumn (name).Property;
+								}
+							}
+							
+							reader.GetValues (vals);
+							var obj = Activator.CreateInstance <T> ();
+							for (var i = 0; i < fields.Length; i++) {
+								fields [i].SetValue (obj, vals [i], null);
+							}
+							r.Add (obj);
 						}
 					}
 				}
@@ -108,36 +131,34 @@ namespace Rouse.Data
 				return ((IEnumerable<T>)this).GetEnumerator ();
 			}
 			
-			public string SqlCommandText
+			public string GetSqlCommandText (TableInfo table)
 			{
-				get {
-					var sb = new StringBuilder ();
-					
-					sb.AppendFormat ("select {0} from \"{1}\"", _select, typeof(T).Name);
-					
-					var head = " where ";
-					foreach (var w in _wheres) {
-						sb.Append (head);
-						sb.Append (w);
-						head = " and ";
-					}
-					
-					head = " order by ";
-					foreach (var o in _orderbys) {
-						sb.Append (head);
-						sb.Append (o.Text);
-						sb.Append (' ');
-						sb.Append (o.Direction);
-						head = ",";
-					}
-					
-					if (!string.IsNullOrEmpty (_take)) {
-						sb.Append (" limit ");
-						sb.Append (_take);
-					}
-					
-					return sb.ToString ();
+				var sb = new StringBuilder ();
+				
+				sb.AppendFormat ("select {0} from \"{1}\"", _select, table.Name);
+				
+				var head = " where ";
+				foreach (var w in _wheres) {
+					sb.Append (head);
+					sb.Append (w);
+					head = " and ";
 				}
+				
+				head = " order by ";
+				foreach (var o in _orderbys) {
+					sb.Append (head);
+					sb.Append (o.Text);
+					sb.Append (' ');
+					sb.Append (o.Direction);
+					head = ",";
+				}
+				
+				if (!string.IsNullOrEmpty (_take)) {
+					sb.Append (" limit ");
+					sb.Append (_take);
+				}
+				
+				return sb.ToString ();
 			}
 			
 			List<Parameter> _params = new List<Parameter> ();
@@ -278,6 +299,59 @@ namespace Rouse.Data
 			}
 		}
 		
+		class TableInfos
+		{
+			readonly object _tableInfosLock = new object ();
+			readonly Dictionary<string, TableInfo> _tableInfos = new Dictionary<string, TableInfo> ();
+			
+			public TableInfo GetTableInfo (Type type, DataRepository repo)
+			{
+				var key = type.Name;
+				var tableInfo = default (TableInfo);
+				lock (_tableInfosLock) {
+					if (!_tableInfos.TryGetValue (key, out tableInfo)) {
+						tableInfo = new TableInfo (type, repo);
+						_tableInfos.Add (key, tableInfo);
+					}
+				}
+				return tableInfo;
+			}
+		}
+		
+		static readonly object _tableInfosLock = new object ();
+		static readonly Dictionary<string, TableInfos> _tableInfos = new Dictionary<string, TableInfos> ();
+		
+		TableInfo GetTableInfo (Type type)
+		{
+			var tableInfos = default(TableInfos);
+			var cs = _connection.ConnectionString;
+			lock (_tableInfosLock) {
+				if (!_tableInfos.TryGetValue (cs, out tableInfos)) {
+					tableInfos = new TableInfos ();
+					_tableInfos.Add (cs, tableInfos);
+				}
+			}			
+			return tableInfos.GetTableInfo (type, this);
+		}
+		
+		DatabaseInfo _dbInfo = null;
+		
+		public DatabaseInfo DatabaseInfo
+		{
+			get {
+				if (_dbInfo == null) {
+					switch (_connection.GetType ().Name) {
+					case "SqliteConnection":
+						_dbInfo = new SqliteDatabaseInfo ();
+						break;
+					default:
+						throw new NotSupportedException (_connection.GetType ().Name);
+					}
+				}
+				return _dbInfo;
+			}
+		}
+				
 		public override Task<QueryResult> Query (Query query)
 		{
 			return Task.Factory.StartNew (delegate {
@@ -286,6 +360,158 @@ namespace Rouse.Data
 					return new QueryResult (e);
 				}
 			});
+		}
+	}
+	
+	public class TableInfo
+	{
+		public readonly string Name;
+		
+		readonly Dictionary<string, ColumnInfo> _columns = new Dictionary<string, ColumnInfo>();
+		
+		public TableInfo (Type type, DataRepository repo)
+		{
+			Name = type.Name;
+			
+			LearnAboutType (type);
+			MigrateDatabase (repo);
+		}
+		
+		void LearnAboutType (Type type)
+		{
+			foreach (var p in type.GetProperties (System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)) {
+				if (!p.CanWrite) return;
+				if (p.GetIndexParameters ().Length != 0) return;
+				_columns [p.Name] = new ColumnInfo (p);
+			}
+		}
+		
+		void MigrateDatabase (DataRepository repo)
+		{
+			var dbInfo = repo.DatabaseInfo;
+			var cols = repo.DatabaseInfo.GetColumnsInTable (Name, repo.Connection);
+			
+			var commands = new List<string> ();
+			
+			if (cols.Count == 0) {
+				var sb = new StringBuilder ();
+				sb.AppendFormat ("create table \"{0}\"(", Name);
+				
+				var head = "";
+				foreach (var c in _columns.Values) {
+					sb.Append (head);
+					sb.Append (dbInfo.GetColumnDeclaration (c));
+					head = ",";
+				}
+				
+				sb.Append (")");
+				commands.Add (sb.ToString ());
+			}
+			else {
+				var existingCols = cols.ToDictionary (x => x);
+				foreach (var c in _columns.Values) {
+					if (!existingCols.ContainsKey (c.Name)) {
+						commands.Add ("alter table \"" + Name + "\" add column " + 
+						              dbInfo.GetColumnDeclaration (c));
+					}
+				}
+			}
+			
+			foreach (var commandText in commands) {
+				using (var cmd = repo.Connection.CreateCommand ()) {
+					cmd.CommandText = commandText;
+					cmd.ExecuteNonQuery ();
+				}
+			}
+		}
+		
+		public ColumnInfo GetColumn (string name)
+		{
+			return _columns [name];
+		}
+	}
+	
+	public class ColumnInfo
+	{
+		public readonly System.Reflection.PropertyInfo Property;
+		public readonly string Name;
+		public readonly Type ClrType;
+		
+		public ColumnInfo (System.Reflection.PropertyInfo property)
+		{
+			Property = property;
+			Name = property.Name;
+			ClrType = property.PropertyType;
+		}
+	}
+	
+	public abstract class DatabaseInfo
+	{
+		public abstract string GetColumnDeclaration (ColumnInfo column);
+		
+		public abstract List<string> GetColumnsInTable (string tableName, IDbConnection connection);
+	}
+	
+	class SqliteDatabaseInfo : DatabaseInfo
+	{
+		public override string GetColumnDeclaration (ColumnInfo column)
+		{
+			var sb = new StringBuilder ();
+			
+			sb.Append ("\"");
+			sb.Append (column.Name);
+			sb.Append ("\"");
+			
+			if (column.ClrType == typeof(string)) {
+				sb.Append (" text");
+			}
+			else if (column.ClrType == typeof(int) || column.ClrType == typeof(long)) {
+				sb.Append (" integer");
+			}
+			else if (column.ClrType == typeof(float) || column.ClrType == typeof(double)) {
+				sb.Append (" real");
+			}
+			else if (column.ClrType == typeof(bool)) {
+				sb.Append (" boolean");
+			}
+			else if (column.ClrType == typeof(DateTime)) {
+				sb.Append (" datetime");
+			}
+			else if (column.ClrType == typeof(byte[])) {
+				sb.Append (" blob");
+			}
+			else if (column.ClrType == typeof(decimal)) {
+				sb.Append (" decimal");
+			}
+			else {
+				throw new NotSupportedException ("Columns of type " + column.ClrType);
+			}
+			
+			return sb.ToString ();
+		}
+		
+		public override List<string> GetColumnsInTable (string tableName, IDbConnection connection)
+		{
+			List<string> r = new List<string>();
+			
+			var query = "pragma table_info(\"" + tableName + "\")";
+			
+			using (var cmd = connection.CreateCommand ()) {
+				cmd.CommandText = query;
+				
+				var nameIndex = -1;
+				
+				using (var reader = cmd.ExecuteReader ()) {
+					while (reader.Read ()) {
+						if (nameIndex < 0) {
+							nameIndex = reader.GetOrdinal ("name");
+						}
+						r.Add (reader.GetString (nameIndex));
+					}
+				}
+			}
+			
+			return r;
 		}
 	}
 }
