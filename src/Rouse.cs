@@ -9,6 +9,35 @@ using System.Threading.Tasks;
 
 namespace Rouse
 {
+	public class ResourceTypeInfo
+	{
+		public string Name { get; private set; }
+		
+		readonly Dictionary<string, PropertyInfo> _props = new Dictionary<string, PropertyInfo>();
+		
+		public ResourceTypeInfo (Type type)
+		{
+			Name = type.Name;
+			
+			LearnAboutType (type);
+		}
+		
+		void LearnAboutType (Type type)
+		{
+			foreach (var p in type.GetProperties (System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)) {
+				if (!p.CanWrite) return;
+				if (p.GetIndexParameters ().Length != 0) return;
+				_props [p.Name] = p;
+			}
+		}
+		
+		public IEnumerable<PropertyInfo> Properties {
+			get {
+				return _props.Values;
+			}
+		}
+	}
+	
 	public class QueryTypeInfo
 	{
 		public readonly string Name;
@@ -123,9 +152,46 @@ namespace Rouse
 			throw new NotImplementedException ();
 		}
 		
-		public void WriteXml (System.IO.TextWriter writer)
+		public void WriteContent (string contentType, System.IO.Stream stream, Encoding encoding)
 		{
-			throw new NotImplementedException ();
+			switch (contentType) {
+			case "application/xml":
+				WriteXml (stream, encoding);
+				break;
+			default:
+				throw new NotSupportedException ("Content-Type: " + contentType);
+			}
+		}
+		
+		public void WriteXml (System.IO.Stream stream, Encoding encoding)
+		{
+			var cult = System.Globalization.CultureInfo.InvariantCulture;
+			
+			var settings = new System.Xml.XmlWriterSettings ();
+			settings.Indent = true;
+			settings.Encoding = encoding;
+			
+			using (var w = System.Xml.XmlWriter.Create (stream, settings)) {
+				w.WriteStartDocument ();
+				w.WriteStartElement ("result");
+				w.WriteAttributeString ("count", Count.ToString (cult));
+
+				ResourceTypeInfo info = null;
+				foreach (var i in _items) {
+					if (info == null) {
+						info = new ResourceTypeInfo (i.GetType ());
+					}
+					w.WriteStartElement (info.Name);
+					foreach (var p in info.Properties) {
+						var v = p.GetValue (i, null);
+						var s = string.Format (cult, "{0}", v);
+						w.WriteElementString (p.Name, s);
+					}
+					w.WriteEndElement ();
+				}
+				
+				w.WriteEndElement ();
+			}
 		}
 	}
 	

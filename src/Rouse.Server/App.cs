@@ -31,15 +31,18 @@ namespace Rouse.Server
 			_repository
 				.Query (list)
 				.ContinueWith ((task) => {
-					Exception err = task.Exception;						
+					var encoding = System.Text.Encoding.UTF8;
+						
+					Exception err = task.Exception;					
 					if (err == null) {
 						var result = task.Result;
 						try {
+							var contentType = "application/xml";
 							var mem = new System.IO.MemoryStream ();
-							using (var writer = new System.IO.StreamWriter (mem, System.Text.Encoding.UTF8)) {
-								result.WriteXml (writer);
-							}
+							result.WriteContent (contentType, mem, encoding);
 							context.Response.StatusCode = 200;
+							context.Response.ContentType = contentType;
+							context.Response.ContentEncoding = encoding;
 							var b = mem.ToArray ();
 							context.Response.ContentLength64 = b.Length;
 							using (var s = context.Response.OutputStream) {
@@ -52,8 +55,10 @@ namespace Rouse.Server
 						}
 					}
 					if (err != null) {
-						context.Response.StatusCode = 500;
+						context.Response.StatusCode = 500;						
 						if (_options.Debug) {
+							context.Response.ContentType = "text/plain";
+							context.Response.ContentEncoding = encoding;
 							var mem = new System.IO.MemoryStream ();
 							using (var writer = new System.IO.StreamWriter (mem, System.Text.Encoding.UTF8)) {
 								writer.WriteLine (err.ToString ());
