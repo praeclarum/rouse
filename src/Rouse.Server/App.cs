@@ -31,20 +31,38 @@ namespace Rouse.Server
 			_repository
 				.Query (list)
 				.ContinueWith ((task) => {
-					if (task.Exception != null) {
+					Exception err = task.Exception;						
+					if (err == null) {
+						var result = task.Result;
+						try {
+							var mem = new System.IO.MemoryStream ();
+							using (var writer = new System.IO.StreamWriter (mem, System.Text.Encoding.UTF8)) {
+								result.WriteXml (writer);
+							}
+							context.Response.StatusCode = 200;
+							var b = mem.ToArray ();
+							context.Response.ContentLength64 = b.Length;
+							using (var s = context.Response.OutputStream) {
+								s.Write (b, 0, b.Length);
+							}
+							context.Response.Close ();
+						}
+						catch (Exception ex) {
+							err = ex;
+						}
+					}
+					if (err != null) {
 						context.Response.StatusCode = 500;
 						if (_options.Debug) {
-							using (var writer = new System.IO.StreamWriter (context.Response.OutputStream, System.Text.Encoding.UTF8)) {
-								writer.WriteLine (task.Exception.ToString ());
+							var mem = new System.IO.MemoryStream ();
+							using (var writer = new System.IO.StreamWriter (mem, System.Text.Encoding.UTF8)) {
+								writer.WriteLine (err.ToString ());
 							}
-						}
-						context.Response.Close ();
-					}
-					else {
-						var result = task.Result;
-						context.Response.StatusCode = 200;
-						using (var writer = new System.IO.StreamWriter (context.Response.OutputStream, System.Text.Encoding.UTF8)) {
-							result.WriteXml (writer);
+							var b = mem.ToArray ();
+							context.Response.ContentLength64 = b.Length;
+							using (var s = context.Response.OutputStream) {
+								s.Write (b, 0, b.Length);
+							}
 						}
 						context.Response.Close ();
 					}
