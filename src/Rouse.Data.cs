@@ -34,7 +34,7 @@ namespace Rouse.Data
 			
 			public IRepositoryCollection<T> Get<T> ()
 			{
-				return new Collection<T> ();
+				return new Collection<T> (_repo);
 			}
 		}
 		
@@ -44,18 +44,28 @@ namespace Rouse.Data
 			public string Direction;
 		}
 		
-		class Collection<T> : IRepositoryCollection<T>
+		class Parameter
 		{
+			public string Name;
+			public object Value;
+		}
+		
+		class Collection<T> : IRepositoryCollection<T>, IOrderedQueryable<T>
+		{
+			DataRepository _repo;
+			
 			public Type ElementType { get { return typeof(T); } }
 			
-			public Collection (Expression expression)
+			public Collection (Expression expression, DataRepository repo)
 			{
+				_repo = repo;
 				Expression = expression;
 				Provider = new CollectionQueryProvider<T> (this);
 			}
 			
-			public Collection ()
+			public Collection (DataRepository repo)
 			{
+				_repo = repo;
 				Expression = Expression.Constant (this);
 				Provider = new CollectionQueryProvider<T> (this);
 			}
@@ -66,7 +76,31 @@ namespace Rouse.Data
 			
 			public IEnumerator<T> GetEnumerator ()
 			{
-				return ((IEnumerable<T>)Provider.Execute (Expression)).GetEnumerator();
+				List<T> r = new List<T>();
+				
+				using (var cmd = _repo._connection.CreateCommand ()) {
+					
+					cmd.CommandText = SqlCommandText;
+					
+					foreach (var p in _params) {
+						var dbp = cmd.CreateParameter ();
+						dbp.ParameterName = p.Name;
+						dbp.Value = p.Value;
+						cmd.Parameters.Add (dbp);
+					}
+					
+					if (_repo._connection.State != ConnectionState.Open) {
+						_repo._connection.Open ();
+					}
+					
+					using (var reader = cmd.ExecuteReader ()) {
+						while (reader.Read ()) {
+							Console.WriteLine (reader);
+						}
+					}
+				}
+				
+				return r.GetEnumerator ();
 			}
 			
 			System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator ()
@@ -106,7 +140,7 @@ namespace Rouse.Data
 				}
 			}
 			
-			List<object> _params = new List<object> ();
+			List<Parameter> _params = new List<Parameter> ();
 			List<string> _wheres = new List<string> ();
 			List<OrderBy> _orderbys = new List<OrderBy> ();
 			string _take;
@@ -114,7 +148,7 @@ namespace Rouse.Data
 			
 			public Collection<U> Clone<U> (Expression accExpression)
 			{
-				var coll = new Collection<U> (accExpression);
+				var coll = new Collection<U> (accExpression, _repo);
 				coll._params.AddRange (_params);
 				coll._wheres.AddRange (_wheres);
 				coll._orderbys.AddRange (_orderbys);
@@ -144,9 +178,12 @@ namespace Rouse.Data
 			string CompileParam (object value)
 			{
 				var index = _params.Count;
-
-				_params.Add (value);
-				return ":p" + index;
+				var p = new Parameter {
+					Name = ":p" + index,
+					Value = value,
+				};
+				_params.Add (p);
+				return p.Name;
 			}
 			
 			string CompileExpression (Expression expr)

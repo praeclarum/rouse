@@ -77,7 +77,7 @@ namespace Rouse
 		IRepositoryCollection<T> Get<T> ();
 	}
 	
-	public interface IRepositoryCollection<T> : IOrderedQueryable<T>
+	public interface IRepositoryCollection<T> : IQueryable<T>
 	{
 	}
 	

@@ -114,7 +114,7 @@ namespace Rouse.Server
 		{
 			if (string.IsNullOrEmpty (_options.PathToProjectFile)) {
 				
-				_repository = new CacheRepository (new DataRepository (new Mono.Data.Sqlite.SqliteConnection ()));
+				_repository = new CacheRepository (new DataRepository (new Mono.Data.Sqlite.SqliteConnection ("Data Source=file::memory:")));
 				
 				GetResources ();
 				
