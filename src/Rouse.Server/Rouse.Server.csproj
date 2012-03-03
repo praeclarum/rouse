@@ -34,6 +34,7 @@
     <Reference Include="System" />
     <Reference Include="System.Xml" />
     <Reference Include="System.Data" />
+    <Reference Include="Mono.Data.Sqlite" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AssemblyInfo.cs" />
@@ -43,6 +44,9 @@
     <Compile Include="App.cs" />
     <Compile Include="..\..\samples\Chat\Model\ChannelMessage.cs">
       <Link>ChannelMessage.cs</Link>
+    </Compile>
+    <Compile Include="..\Rouse.Data.cs">
+      <Link>Rouse.Data.cs</Link>
     </Compile>
   </ItemGroup>
   <Import Project="$(MSBuildBinPath)\Microsoft.CSharp.targets" />

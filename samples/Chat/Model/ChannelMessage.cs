@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Rouse;
 
 namespace Chat
@@ -17,7 +18,7 @@ namespace Chat
 		}
 	}
 	
-	public class RecentChannelMessages : Query<ChannelMessage>
+	public class RecentChannelMessages : Query
 	{
 		public string Channel { get; set; }
 		
@@ -32,9 +33,9 @@ namespace Chat
 			Channel = channel;
 		}
 		
-		public override CollectionQuery<ChannelMessage> Filter (CollectionQuery<ChannelMessage> source)
+		public override System.Collections.IEnumerable Perform (ICollectionFactory collections)
 		{
-			var q = from m in source
+			var q = from m in collections.Get<ChannelMessage> ()
 					where m.Channel == Channel
 					orderby m.PostTime descending
 					select m;

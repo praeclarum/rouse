@@ -22,11 +22,39 @@ namespace Chat
 			
 			var channel = new ChannelViewController ("monotouch", repo);
 			
+			Stuff (new Fact ());
+			
 			window.RootViewController = new UINavigationController (channel);
 			
 			window.MakeKeyAndVisible ();
 			
 			return true;
+		}
+		
+		void Stuff (IFactory f)
+		{
+			Console.WriteLine (f.Get <Foo> ());
+		}
+	}
+	
+	class Foo
+	{
+		public override string ToString ()
+		{
+			return string.Format ("[Foo]");
+		}
+	}
+	
+	interface IFactory
+	{
+		T Get<T> ();
+	}
+	
+	class Fact : IFactory
+	{
+		public T Get<T> ()
+		{
+			return (T)Activator.CreateInstance (typeof(T));
 		}
 	}
 	

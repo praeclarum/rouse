@@ -1,6 +1,8 @@
 using System;
 using System.Net;
 using System.Collections.Generic;
+using System.Linq;
+using Rouse.Data;
 
 namespace Rouse.Server
 {
@@ -9,13 +11,13 @@ namespace Rouse.Server
 		public abstract void Respond (HttpListenerContext context);
 	}
 	
-	public class QueryResource : ServerResource
+	public class ResourceListResource : ServerResource
 	{
 		Query _prototype;
 		Repository _repository;
 		ServerOptions _options;
 		
-		public QueryResource (Query prototype, Repository repository, ServerOptions options)
+		public ResourceListResource (Query prototype, Repository repository, ServerOptions options)
 		{
 			_prototype = prototype;
 			_repository = repository;
@@ -24,10 +26,10 @@ namespace Rouse.Server
 		
 		public override void Respond (HttpListenerContext context)
 		{
-			var q = (Query)Activator.CreateInstance (_prototype.GetType ());
+			var list = (Query)Activator.CreateInstance (_prototype.GetType ());
 			
 			_repository
-				.Query (q)
+				.Query (list)
 				.ContinueWith ((task) => {
 					if (task.Exception != null) {
 						context.Response.StatusCode = 500;
@@ -93,13 +95,13 @@ namespace Rouse.Server
 		{
 			_resources = new Dictionary<string, ServerResource>();
 			
-			var asm = typeof(App).Assembly;
-			var queryType = typeof(Query);
+			var asm = typeof (App).Assembly;
+			var queryType = typeof (Query);
 			foreach (var t in asm.GetTypes ()) {
 				if (queryType.IsAssignableFrom (t) && !t.IsAbstract) {
 					
 					var q = (Query)Activator.CreateInstance (t);
-					var r = new QueryResource (q, _repository, _options);
+					var r = new ResourceListResource (q, _repository, _options);
 					
 					_resources[q.Path] = r;
 					
@@ -112,7 +114,7 @@ namespace Rouse.Server
 		{
 			if (string.IsNullOrEmpty (_options.PathToProjectFile)) {
 				
-				_repository = new CacheRepository (new DbRepository (null));
+				_repository = new CacheRepository (new DataRepository (new Mono.Data.Sqlite.SqliteConnection ()));
 				
 				GetResources ();
 				

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Data;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Net;
@@ -68,12 +67,18 @@ namespace Rouse
 				}
 				return sb.ToString ();
 			}
-		}		
+		}
+		
+		public abstract System.Collections.IEnumerable Perform (ICollectionFactory collections);
 	}
 	
-	public abstract class Query<T> : Query
+	public interface ICollectionFactory
 	{
-		public abstract CollectionQuery<T> Filter (CollectionQuery<T> source);
+		IRepositoryCollection<T> Get<T> ();
+	}
+	
+	public interface IRepositoryCollection<T> : IOrderedQueryable<T>
+	{
 	}
 	
 	public class CollectionQuery<T>
@@ -94,9 +99,17 @@ namespace Rouse
 		}
 	}
 	
-	public abstract class QueryResult
+	public class QueryResult
 	{
-		public int Count { get { return 0; } }
+		List<object> _items;
+		
+		public int Count { get { return _items.Count; } }
+		public object this [int index] { get { return _items [index]; } }
+		
+		public QueryResult (System.Collections.IEnumerable enumerable)
+		{
+			_items = new List<object> (enumerable.Cast<object> ());
+		}
 		
 		public static QueryResult FromXml (System.IO.TextReader textReader)
 		{
@@ -116,27 +129,22 @@ namespace Rouse
 		}
 	}
 	
-	public class QueryResult<T> : QueryResult
+	public class QueryResult<T>
 	{
+		QueryResult _result;
+		
+		public QueryResult (QueryResult result)
+		{
+			_result = result;
+		}
+		
 		public T this [int index] {
 			get {
-				return default(T);
+				return (T)_result [index];
 			}
 		}
 	}
-	
-	public class DbRepository : Repository
-	{
-		public DbRepository (IDbConnection connection)
-		{
-		}
 		
-		public override Task<QueryResult> Query (Query query)
-		{
-			throw new NotImplementedException ();
-		}
-	}
-	
 	public class CacheRepository : Repository
 	{
 		class CacheItem
@@ -245,7 +253,7 @@ namespace Rouse
 	{
 		public abstract Task<QueryResult> Query (Query query);
 		
-		public Task<QueryResult<T>> Query<T> (Query<T> query)
+		public Task<QueryResult<T>> Query<T> (Query query)
 		{
 			return Query ((Query)query)
 				.ContinueWith ((task) => {
