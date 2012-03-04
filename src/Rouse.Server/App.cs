@@ -3,25 +3,88 @@ using System.Net;
 using System.Collections.Generic;
 using System.Linq;
 using Rouse.Data;
+using System.Text;
 
 namespace Rouse.Server
 {
-	public abstract class ServerResource
+	public abstract class Responder
 	{
-		public abstract void Respond (HttpListenerContext context);
-	}
-	
-	public class ResourceListResource : ServerResource
-	{
-		Query _prototype;
-		Repository _repository;
-		ServerOptions _options;
+		protected readonly Repository _repository;
+		protected readonly ServerOptions _options;
 		
-		public ResourceListResource (Query prototype, Repository repository, ServerOptions options)
+		public Responder (Repository repository, ServerOptions options)
 		{
-			_prototype = prototype;
 			_repository = repository;
 			_options = options;
+		}
+		
+		public abstract void Respond (HttpListenerContext context);
+		
+		protected void RespondWithError (Exception err, HttpListenerResponse res)
+		{
+			var encoding = Encoding.UTF8;
+			
+			res.StatusCode = 500;
+			if (_options.Debug) {
+				res.ContentType = "text/plain";
+				res.ContentEncoding = encoding;
+				var mem = new System.IO.MemoryStream ();
+				using (var writer = new System.IO.StreamWriter (mem, System.Text.Encoding.UTF8)) {
+					writer.WriteLine (err.ToString ());
+				}
+				var b = mem.ToArray ();
+				res.ContentLength64 = b.Length;
+				using (var s = res.OutputStream) {
+					s.Write (b, 0, b.Length);
+				}
+			}
+			res.Close ();
+		}
+	}
+	
+	public class ResourceResponder : Responder
+	{
+		Resource _prototype;
+		
+		public ResourceResponder (Resource prototype, Repository repository, ServerOptions options)
+			: base (repository, options)
+		{
+			_prototype = prototype;
+		}
+		
+		public override void Respond (HttpListenerContext context)
+		{
+			var resource = (Resource)Activator.CreateInstance (_prototype.GetType ());
+			var req = context.Request;
+			var res = context.Response;
+			
+			try {				
+				if (req.HttpMethod == "POST") {
+					Console.WriteLine ("POST");
+					using (var reqStream = req.InputStream) {
+						resource.ReadXml (reqStream);
+					}
+				}
+				//else if (req.HttpMethod == "GET") {
+				//}
+				else {
+					res.StatusCode = 405;
+					res.Close ();
+				}
+			} catch (Exception ex) {
+				RespondWithError (ex, res);
+			}
+		}
+	}
+	
+	public class QueryResponder : Responder
+	{
+		Query _prototype;
+		
+		public QueryResponder (Query prototype, Repository repository, ServerOptions options)
+			: base (repository, options)
+		{
+			_prototype = prototype;
 		}
 		
 		public override void Respond (HttpListenerContext context)
@@ -29,7 +92,7 @@ namespace Rouse.Server
 			var list = (Query)Activator.CreateInstance (_prototype.GetType ());
 			
 			_repository
-				.Query (list)
+				.Get (list)
 				.ContinueWith ((task) => {
 					var encoding = System.Text.Encoding.UTF8;
 						
@@ -55,21 +118,7 @@ namespace Rouse.Server
 						}
 					}
 					if (err != null) {
-						context.Response.StatusCode = 500;						
-						if (_options.Debug) {
-							context.Response.ContentType = "text/plain";
-							context.Response.ContentEncoding = encoding;
-							var mem = new System.IO.MemoryStream ();
-							using (var writer = new System.IO.StreamWriter (mem, System.Text.Encoding.UTF8)) {
-								writer.WriteLine (err.ToString ());
-							}
-							var b = mem.ToArray ();
-							context.Response.ContentLength64 = b.Length;
-							using (var s = context.Response.OutputStream) {
-								s.Write (b, 0, b.Length);
-							}
-						}
-						context.Response.Close ();
+						RespondWithError (err, context.Response);
 					}
 				});
 		}
@@ -89,7 +138,7 @@ namespace Rouse.Server
 		
 		HttpListener _listener;
 		
-		Dictionary<string, ServerResource> _resources;
+		Dictionary<string, Responder> _responders;
 		
 		Repository _repository;
 		
@@ -114,21 +163,33 @@ namespace Rouse.Server
 			_options = options;
 		}
 		
-		void GetResources ()
+		void GetResponders ()
 		{
-			_resources = new Dictionary<string, ServerResource>();
+			_responders = new Dictionary<string, Responder>();
 			
 			var asm = typeof (App).Assembly;
+			
 			var queryType = typeof (Query);
+			var resourceType = typeof (Resource);
+			
 			foreach (var t in asm.GetTypes ()) {
 				if (queryType.IsAssignableFrom (t) && !t.IsAbstract) {
 					
-					var q = (Query)Activator.CreateInstance (t);
-					var r = new ResourceListResource (q, _repository, _options);
+					var query = (Query)Activator.CreateInstance (t);
+					var r = new QueryResponder (query, _repository, _options);
 					
-					_resources[q.Path] = r;
+					_responders [query.Path] = r;
 					
-					Console.WriteLine ("{0} -> {1}", q.Path, r);
+					Console.WriteLine ("{0} -> {1}", query.Path, r);
+				}
+				else if (resourceType.IsAssignableFrom (t) && !t.IsAbstract) {
+					
+					var resource = (Resource)Activator.CreateInstance (t);
+					var r = new ResourceResponder (resource, _repository, _options);
+					
+					_responders [resource.Path] = r;
+					
+					Console.WriteLine ("{0} -> {1}", resource.Path, r);
 				}
 			}
 		}
@@ -139,7 +200,7 @@ namespace Rouse.Server
 				
 				_repository = new CacheRepository (new DataRepository (new Mono.Data.Sqlite.SqliteConnection ("Data Source=file::memory:")));
 				
-				GetResources ();
+				GetResponders ();
 				
 				RunHttpServer ();
 			}
@@ -176,9 +237,9 @@ namespace Rouse.Server
 				
 				var path = context.Request.Url.AbsolutePath;
 				
-				ServerResource resource;
+				Responder resource;
 				
-				if (_resources.TryGetValue (path, out resource)) {
+				if (_responders.TryGetValue (path, out resource)) {
 					resource.Respond (context);
 				}
 				else {

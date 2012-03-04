@@ -351,8 +351,13 @@ namespace Rouse.Data
 				return _dbInfo;
 			}
 		}
+		
+		public override Task Save (Resource resource)
+		{
+			throw new NotImplementedException ();
+		}
 				
-		public override Task<QueryResult> Query (Query query)
+		public override Task<QueryResult> Get (Query query)
 		{
 			return Task.Factory.StartNew (delegate {
 				lock (_connectionLock) {

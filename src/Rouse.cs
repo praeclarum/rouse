@@ -18,35 +18,43 @@ namespace Rouse
 
 	public class ResourceTypeInfo
 	{
-		public string Name { get; private set; }
-		
-		readonly Dictionary<string, PropertyInfo> _props = new Dictionary<string, PropertyInfo>();
+		public readonly string Name;
+		public readonly PropertyInfo[] Properties;
 		
 		public ResourceTypeInfo (Type type)
 		{
 			Name = type.Name;
-			
-			LearnAboutType (type);
-		}
-		
-		void LearnAboutType (Type type)
-		{
-			foreach (var p in type.GetProperties (System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)) {
-				if (!p.CanWrite) return;
-				if (p.GetIndexParameters ().Length != 0) return;
-				_props [p.Name] = p;
-			}
-		}
-		
-		public IEnumerable<PropertyInfo> Properties {
-			get {
-				return _props.Values;
-			}
+			Properties = type
+				.GetProperties (BindingFlags.Public | BindingFlags.Instance)
+				.Where (x => x.CanWrite)
+				.Where (x => x.GetIndexParameters ().Length == 0)
+				.ToArray ();
 		}
 	}
 	
-	public class Resource : INotifyPropertyChanged
+	public abstract class Resource : INotifyPropertyChanged
 	{
+		static object _typeInfosLock = new object ();
+		static readonly Dictionary<Type, ResourceTypeInfo> _typeInfos = new Dictionary<Type, ResourceTypeInfo> ();
+		
+		ResourceTypeInfo _typeInfo = null;
+		
+		public ResourceTypeInfo TypeInfo
+		{
+			get {
+				if (_typeInfo == null) {
+					var type = GetType ();
+					lock (_typeInfosLock) {
+						if (!_typeInfos.TryGetValue (type, out _typeInfo)) {
+							_typeInfo = new ResourceTypeInfo (type);
+							_typeInfos.Add (type, _typeInfo);
+						}
+					}
+				}
+				return _typeInfo;
+			}
+		}
+
 		public event PropertyChangedEventHandler PropertyChanged;
 		
 		protected virtual void OnPropertyChanged (string name)
@@ -57,10 +65,35 @@ namespace Rouse
 			}
 		}
 		
-		public virtual string Url {
+		public virtual string Path {
 			get {
-				return "/" + GetType ().Name;
+				return "/" + TypeInfo.Name;
 			}
+		}
+		
+		public void ReadXml (System.IO.Stream stream)
+		{
+			using (var reader = new System.Xml.XmlTextReader (stream)) {
+				ReadXml (reader);
+			}
+		}
+		
+		public virtual void ReadXml (System.Xml.XmlReader reader)
+		{
+			throw new NotImplementedException ();
+		}
+		
+		public virtual void WriteXml (System.Xml.XmlWriter writer)
+		{
+			var cult = System.Globalization.CultureInfo.InvariantCulture;
+			var info = TypeInfo;
+			writer.WriteStartElement (info.Name);
+			foreach (var p in info.Properties) {
+				var v = p.GetValue (this, null);
+				var s = string.Format (cult, "{0}", v);
+				writer.WriteElementString (p.Name, s);
+			}
+			writer.WriteEndElement ();
 		}
 	}
 	
@@ -79,27 +112,31 @@ namespace Rouse
 			Parameters = type
 				.GetProperties (BindingFlags.Public | BindingFlags.Instance)
 				.Where (x => x.CanWrite)
+				.Where (x => x.GetIndexParameters ().Length == 0)
 				.ToArray ();
 		}
 	}
 	
 	public abstract class Query
 	{
-		static object _queryTypeInfoLock = new object ();
-		static readonly Dictionary<Type, QueryTypeInfo> _queryTypeInfo = new Dictionary<Type, QueryTypeInfo>();
+		static object _typeInfosLock = new object ();
+		static readonly Dictionary<Type, QueryTypeInfo> _typeInfos = new Dictionary<Type, QueryTypeInfo> ();
+
+		QueryTypeInfo _typeInfo = null;
 		
-		public virtual QueryTypeInfo TypeInfo
+		public QueryTypeInfo TypeInfo
 		{
 			get {
-				QueryTypeInfo info;
-				var type = GetType ();
-				lock (_queryTypeInfoLock) {
-					if (!_queryTypeInfo.TryGetValue (type, out info)) {
-						info = new QueryTypeInfo (type);
-						_queryTypeInfo.Add (type, info);
+				if (_typeInfo == null) {
+					var type = GetType ();
+					lock (_typeInfosLock) {
+						if (!_typeInfos.TryGetValue (type, out _typeInfo)) {
+							_typeInfo = new QueryTypeInfo (type);
+							_typeInfos.Add (type, _typeInfo);
+						}
 					}
 				}
-				return info;
+				return _typeInfo;
 			}
 		}
 		
@@ -142,14 +179,14 @@ namespace Rouse
 	
 	public class QueryResult
 	{
-		List<object> _items;
+		List<Resource> _items;
 		
 		public int Count { get { return _items.Count; } }
-		public object this [int index] { get { return _items [index]; } }
+		public Resource this [int index] { get { return _items [index]; } }
 		
 		public QueryResult (System.Collections.IEnumerable enumerable)
 		{
-			_items = new List<object> (enumerable.Cast<object> ());
+			_items = new List<Resource> (enumerable.Cast<Resource> ());
 		}
 		
 		public static QueryResult FromXml (System.IO.TextReader textReader)
@@ -188,18 +225,8 @@ namespace Rouse
 				w.WriteStartElement ("result");
 				w.WriteAttributeString ("count", Count.ToString (cult));
 
-				ResourceTypeInfo info = null;
 				foreach (var i in _items) {
-					if (info == null) {
-						info = new ResourceTypeInfo (i.GetType ());
-					}
-					w.WriteStartElement (info.Name);
-					foreach (var p in info.Properties) {
-						var v = p.GetValue (i, null);
-						var s = string.Format (cult, "{0}", v);
-						w.WriteElementString (p.Name, s);
-					}
-					w.WriteEndElement ();
+					i.WriteXml (w);
 				}
 				
 				w.WriteEndElement ();
@@ -208,6 +235,7 @@ namespace Rouse
 	}
 	
 	public class QueryResult<T>
+		where T : Resource
 	{
 		QueryResult _result;
 		
@@ -316,16 +344,37 @@ namespace Rouse
 		
 		public override Task Save (Resource resource)
 		{
-			var url = MakeUrlAbsolute (resource.Url);
+			var url = MakeUrlAbsolute (resource.Path);
 			
 			var req = (HttpWebRequest)WebRequest.Create (url);
+			req.Method = "POST";
 			req.CookieContainer = _cookies;
+			req.ContentType = "application/xml";
+			var encoding = Encoding.UTF8;
 			
 			return Task.Factory
-				.FromAsync<WebResponse> (req.BeginGetResponse, req.EndGetResponse, null)
-				.ContinueWith ((resTask) => {
-					if (resTask.IsFaulted) throw resTask.Exception.InnerException;
-					throw new NotImplementedException ();
+				.FromAsync<System.IO.Stream> (req.BeginGetRequestStream, req.EndGetRequestStream, null)
+				.ContinueWith ((streamTask) => {
+					if (streamTask.IsFaulted) throw streamTask.Exception.InnerException;
+					
+					var mem = new System.IO.MemoryStream ();
+					using (var w = new System.Xml.XmlTextWriter (mem, encoding)) {
+						w.WriteStartDocument ();
+						resource.WriteXml (w);
+					}
+					req.ContentLength = mem.Length;
+					mem.Position = 0;
+					using (var reqStream = streamTask.Result) {
+						mem.CopyTo (reqStream);
+					}
+					var t = Task.Factory
+						.FromAsync<WebResponse> (req.BeginGetResponse, req.EndGetResponse, null)
+						.ContinueWith ((resTask) => {
+							if (resTask.IsFaulted) throw resTask.Exception.InnerException;
+							throw new NotImplementedException ();
+						});
+					t.Wait ();
+					if (t.IsFaulted) throw t.Exception.InnerException;
 				});
 		}
 		
@@ -358,7 +407,8 @@ namespace Rouse
 		
 		public abstract Task<QueryResult> Get (Query query);
 		
-		public Task<QueryResult<T>> Get<T> (Query query) where T : Resource
+		public Task<QueryResult<T>> Get<T> (Query query)
+			where T : Resource
 		{
 			return Get ((Query)query)
 				.ContinueWith ((task) => {

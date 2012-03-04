@@ -35,6 +35,7 @@ namespace Chat
 			while (ex.InnerException != null) {
 				ex = ex.InnerException;
 			}
+			Console.WriteLine (ex);
 			_alert = new UIAlertView (context + " " + ex.GetType ().Name, ex.Message, null, "OK");
 			_alert.Show ();
 		}
