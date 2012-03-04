@@ -7,6 +7,7 @@ using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
+using System.ComponentModel.DataAnnotations;
 
 namespace Rouse
 {
@@ -29,6 +30,11 @@ namespace Rouse
 				.Where (x => x.CanWrite)
 				.Where (x => x.GetIndexParameters ().Length == 0)
 				.ToArray ();
+		}
+		
+		public PropertyInfo FindProperty (string name)
+		{
+			return Properties.FirstOrDefault (p => p.Name == name);
 		}
 	}
 	
@@ -71,6 +77,18 @@ namespace Rouse
 			}
 		}
 		
+		public virtual ValidationReport Validate ()
+		{
+			var r = new ValidationReport ();
+			foreach (var p in TypeInfo.Properties) {
+				var ctx = new ValidationContext (this, null, null);
+				ctx.MemberName = p.Name;
+				var val = p.GetValue (this, null);
+				Validator.TryValidateProperty (val, ctx, r.Results);
+			}
+			return r;
+		}
+		
 		public void ReadXml (System.IO.Stream stream)
 		{
 			using (var reader = new System.Xml.XmlTextReader (stream)) {
@@ -80,7 +98,25 @@ namespace Rouse
 		
 		public virtual void ReadXml (System.Xml.XmlReader reader)
 		{
-			throw new NotImplementedException ();
+			var cult = System.Globalization.CultureInfo.InvariantCulture;
+			var info = TypeInfo;
+			PropertyInfo prop = null;
+			while (reader.Read ()) {
+				if (reader.NodeType == System.Xml.XmlNodeType.Element) {
+					var name = reader.LocalName;
+					prop = info.FindProperty (name);
+				}
+				else if (reader.NodeType == System.Xml.XmlNodeType.Text) {
+					if (prop != null) {
+						var valText = reader.Value.Trim ();
+						var val = Convert.ChangeType (valText, prop.PropertyType, cult);
+						prop.SetValue (this, val, null);
+					}
+				}
+				else if (reader.NodeType == System.Xml.XmlNodeType.EndElement) {
+					prop = null;
+				}
+			}
 		}
 		
 		public virtual void WriteXml (System.Xml.XmlWriter writer)
@@ -250,6 +286,33 @@ namespace Rouse
 			get {
 				return (T)_result [index];
 			}
+		}
+	}
+	
+	#endregion
+	
+	#region Validation
+	
+	public class ValidationReport
+	{
+		public List<ValidationResult> Results { get; private set; }
+		
+		public bool IsValid { get { return Results.Count == 0; } }
+		
+		public ValidationReport ()
+		{
+			Results = new List<ValidationResult> ();
+		}
+		
+		public void WriteXml (System.Xml.XmlWriter writer)
+		{
+			writer.WriteStartElement ("ValidationReport");
+			foreach (var r in Results) {
+				writer.WriteStartElement ("Invalid");
+				writer.WriteAttributeString ("member", r.MemberNames.FirstOrDefault ());
+				writer.WriteEndElement ();
+			}
+			writer.WriteEndElement ();
 		}
 	}
 	

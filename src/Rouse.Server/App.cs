@@ -20,17 +20,17 @@ namespace Rouse.Server
 		
 		public abstract void Respond (HttpListenerContext context);
 		
-		protected void RespondWithError (Exception err, HttpListenerResponse res)
+		protected void RespondWithPlainText (int status, Action<System.IO.TextWriter> write, HttpListenerResponse res)
 		{
 			var encoding = Encoding.UTF8;
 			
-			res.StatusCode = 500;
+			res.StatusCode = status;
 			if (_options.Debug) {
 				res.ContentType = "text/plain";
 				res.ContentEncoding = encoding;
 				var mem = new System.IO.MemoryStream ();
 				using (var writer = new System.IO.StreamWriter (mem, System.Text.Encoding.UTF8)) {
-					writer.WriteLine (err.ToString ());
+					write (writer);
 				}
 				var b = mem.ToArray ();
 				res.ContentLength64 = b.Length;
@@ -39,6 +39,28 @@ namespace Rouse.Server
 				}
 			}
 			res.Close ();
+		}
+		
+		protected void RespondWithPlainText (int status, string text, HttpListenerResponse res)
+		{
+			RespondWithPlainText (status, (w) => { w.Write (text); }, res); 
+		}
+		
+		protected void RespondWithError (Exception err, HttpListenerResponse res)
+		{
+			RespondWithPlainText (500, _options.Debug ? err.ToString () : "", res);
+		}
+		
+		protected void RespondWithXml (int status, Action<System.Xml.XmlWriter> write, HttpListenerResponse res)
+		{
+			var settings = new System.Xml.XmlWriterSettings {
+				Indent = true,
+			};			
+			RespondWithPlainText (status, (w) => {
+				using (var xw = System.Xml.XmlWriter.Create (w, settings)) {
+					write (xw);
+				}
+			}, res);
 		}
 	}
 	
@@ -63,6 +85,18 @@ namespace Rouse.Server
 					Console.WriteLine ("POST");
 					using (var reqStream = req.InputStream) {
 						resource.ReadXml (reqStream);
+					}
+					
+					var val = resource.Validate ();
+					if (val.IsValid) {
+						throw new NotImplementedException ();
+						
+						res.StatusCode = 302;
+						res.RedirectLocation = resource.Path;
+						res.Close ();
+					}
+					else {
+						RespondWithXml (400, val.WriteXml, res);
 					}
 				}
 				//else if (req.HttpMethod == "GET") {

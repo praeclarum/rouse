@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using Rouse;
 
@@ -8,8 +9,11 @@ namespace Chat
 	{
 		[PrimaryKey]
 		public string Id { get; set; }
+		[Required]
 		public string Username { get; set; }
+		[Required]
 		public string Text { get; set; }
+		[Required]
 		public string ChannelName { get; set; }
 		public DateTime PostTime { get; set; }
 		
