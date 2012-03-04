@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Net;
@@ -9,6 +10,12 @@ using System.Threading.Tasks;
 
 namespace Rouse
 {
+	#region Resources
+	
+	public class PrimaryKeyAttribute : Attribute
+	{
+	}
+
 	public class ResourceTypeInfo
 	{
 		public string Name { get; private set; }
@@ -37,6 +44,29 @@ namespace Rouse
 			}
 		}
 	}
+	
+	public class Resource : INotifyPropertyChanged
+	{
+		public event PropertyChangedEventHandler PropertyChanged;
+		
+		protected virtual void OnPropertyChanged (string name)
+		{
+			var ev = PropertyChanged;
+			if (ev != null) {
+				ev (this, new PropertyChangedEventArgs (name));
+			}
+		}
+		
+		public virtual string Url {
+			get {
+				return "/" + GetType ().Name;
+			}
+		}
+	}
+	
+	#endregion
+	
+	#region Queries
 	
 	public class QueryTypeInfo
 	{
@@ -98,7 +128,7 @@ namespace Rouse
 			}
 		}
 		
-		public abstract System.Collections.IEnumerable Perform (ICollectionFactory collections);
+		public abstract System.Collections.IEnumerable Get (ICollectionFactory collections);
 	}
 	
 	public interface ICollectionFactory
@@ -108,24 +138,6 @@ namespace Rouse
 	
 	public interface IRepositoryCollection<T> : IQueryable<T>
 	{
-	}
-	
-	public class CollectionQuery<T>
-	{
-		public CollectionQuery<T> Where (Expression<Func<T, bool>> whereExpression)
-		{
-			throw new NotImplementedException ();
-		}
-		
-		public CollectionQuery<T> OrderByDescending<U> (Expression<Func<T, U>> whereExpression)
-		{
-			throw new NotImplementedException ();
-		}
-		
-		public CollectionQuery<T> Take (int max)
-		{
-			throw new NotImplementedException ();
-		}
 	}
 	
 	public class QueryResult
@@ -199,6 +211,8 @@ namespace Rouse
 	{
 		QueryResult _result;
 		
+		public int Count { get { return _result.Count; } }
+		
 		public QueryResult (QueryResult result)
 		{
 			_result = result;
@@ -210,6 +224,10 @@ namespace Rouse
 			}
 		}
 	}
+	
+	#endregion
+	
+	#region Repositories
 		
 	public class CacheRepository : Repository
 	{
@@ -230,7 +248,12 @@ namespace Rouse
 			_sourceRepository = sourceRepository;
 		}
 		
-		public override Task<QueryResult> Query (Query query)
+		public override Task Save (Resource resource)
+		{
+			return _sourceRepository.Save (resource);
+		}
+		
+		public override Task<QueryResult> Get (Query query)
 		{
 			var url = query.Url;
 			
@@ -246,7 +269,8 @@ namespace Rouse
 					return item.Result;
 				}
 				else {
-					var sourceTask = _sourceRepository.Query (query)
+					var sourceTask = _sourceRepository
+						.Get (query)
 						.ContinueWith ((task) => {
 							if (task.Exception != null) throw task.Exception.InnerException;
 							var r = task.Result;
@@ -279,16 +303,20 @@ namespace Rouse
 			_hostname = hostname;
 		}
 		
-		public override Task<QueryResult> Query (Query query)
+		string MakeUrlAbsolute (string url)
 		{
-			var url = query.Url;
-			
 			if (!url.StartsWith ("http://") && !url.StartsWith ("https://")) {
 				if (!url.StartsWith ("/")) {
 					url = "/" + url;
 				}
 				url = "http://" + _hostname + url;
 			}
+			return url;
+		}
+		
+		public override Task Save (Resource resource)
+		{
+			var url = MakeUrlAbsolute (resource.Url);
 			
 			var req = (HttpWebRequest)WebRequest.Create (url);
 			req.CookieContainer = _cookies;
@@ -296,7 +324,22 @@ namespace Rouse
 			return Task.Factory
 				.FromAsync<WebResponse> (req.BeginGetResponse, req.EndGetResponse, null)
 				.ContinueWith ((resTask) => {
-					if (resTask.Exception != null) throw resTask.Exception.InnerException;
+					if (resTask.IsFaulted) throw resTask.Exception.InnerException;
+					throw new NotImplementedException ();
+				});
+		}
+		
+		public override Task<QueryResult> Get (Query query)
+		{
+			var url = MakeUrlAbsolute (query.Url);
+			
+			var req = (HttpWebRequest)WebRequest.Create (url);
+			req.CookieContainer = _cookies;
+			
+			return Task.Factory
+				.FromAsync<WebResponse> (req.BeginGetResponse, req.EndGetResponse, null)
+				.ContinueWith ((resTask) => {
+					if (resTask.IsFaulted) throw resTask.Exception.InnerException;
 					var res = (HttpWebResponse)resTask.Result;
 					using (var s = res.GetResponseStream ()) {
 						using (var r = new System.IO.StreamReader (s)) {
@@ -307,30 +350,24 @@ namespace Rouse
 		}
 	}
 	
-	public class RouseException : Exception
-	{
-		public RouseException (string message)
-			: base (message)
-		{
-		}
-	}
-	
 	public abstract class Repository
 	{
-		public abstract Task<QueryResult> Query (Query query);
+		//public abstract Task<T> Get<T> (object primaryKey);
 		
-		public Task<QueryResult<T>> Query<T> (Query query)
+		public abstract Task Save (Resource resource);
+		
+		public abstract Task<QueryResult> Get (Query query);
+		
+		public Task<QueryResult<T>> Get<T> (Query query) where T : Resource
 		{
-			return Query ((Query)query)
+			return Get ((Query)query)
 				.ContinueWith ((task) => {
 					if (task.Exception != null) throw task.Exception.InnerException;
-					var gr = task.Result as QueryResult<T>;
-					if (gr == null) {
-						throw new RouseException ("Query resulted in a list of objects of the wrong type.");
-					}
-					return gr;
+					return new QueryResult<T> (task.Result);
 				});
 		}
 	}
+	
+	#endregion
 }
 

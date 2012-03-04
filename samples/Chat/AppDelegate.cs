@@ -22,8 +22,6 @@ namespace Chat
 			
 			var channel = new ChannelViewController ("monotouch", repo);
 			
-			Stuff (new Fact ());
-			
 			window.RootViewController = new UINavigationController (channel);
 			
 			window.MakeKeyAndVisible ();
@@ -31,55 +29,50 @@ namespace Chat
 			return true;
 		}
 		
-		void Stuff (IFactory f)
+		static UIAlertView _alert;
+		public static void ShowError (string context, Exception ex)
 		{
-			Console.WriteLine (f.Get <Foo> ());
+			while (ex.InnerException != null) {
+				ex = ex.InnerException;
+			}
+			_alert = new UIAlertView (context + " " + ex.GetType ().Name, ex.Message, null, "OK");
+			_alert.Show ();
 		}
 	}
-	
-	class Foo
-	{
-		public override string ToString ()
-		{
-			return string.Format ("[Foo]");
-		}
-	}
-	
-	interface IFactory
-	{
-		T Get<T> ();
-	}
-	
-	class Fact : IFactory
-	{
-		public T Get<T> ()
-		{
-			return (T)Activator.CreateInstance (typeof(T));
-		}
-	}
-	
+
 	class ChannelViewController : UITableViewController
 	{
-		UIAlertView _alert;
+		Repository _repo;
+		string _channel;
 		
 		public ChannelViewController (string channel, Repository repo)
 		{
-			Title = channel;
+			_channel = channel;
+			_repo = repo;
 			
-			var data = new Data ();
-			var query = new RecentChannelMessages (channel);
+			Title = channel;			
+			TableView.DataSource = new Data ();
 			
-			repo.Query (query).ContinueWith ((task) => {
-				if (task.Exception != null) {
-					var ex = (Exception)task.Exception;
-					while (ex.InnerException != null) {
-						ex = ex.InnerException;
-					}
-					_alert = new UIAlertView (ex.GetType ().Name, ex.Message, null, "OK");
-					_alert.Show ();
+			NavigationItem.RightBarButtonItem = new UIBarButtonItem (
+				UIBarButtonSystemItem.Compose,
+				delegate {
+					var c = new NewMessageViewController (channel, repo);
+					PresentModalViewController (new UINavigationController (c), true);
+			});
+			
+			Refresh ();
+		}
+		
+		void Refresh ()
+		{
+			var query = new RecentChannelMessages (_channel);
+			
+			_repo.Get<Message> (query).ContinueWith ((task) => {
+				if (task.IsFaulted) {
+					AppDelegate.ShowError ("Refresh", task.Exception);
 				}
 				else {
-					data.Messages = task.Result;
+					((Data)TableView.DataSource).Messages = task.Result;
 					TableView.ReloadData ();
 				}				
 			}, new DispatchQueueScheduler ());
@@ -87,7 +80,7 @@ namespace Chat
 		
 		class Data : UITableViewDataSource
 		{
-			public QueryResult<ChannelMessage> Messages;
+			public QueryResult<Message> Messages;
 			
 			public override int NumberOfSections (UITableView tableView)
 			{
@@ -112,6 +105,50 @@ namespace Chat
 				
 				return cell;
 			}
+		}
+	}
+	
+	class NewMessageViewController : UIViewController
+	{
+		UITextView _text;
+		
+		public NewMessageViewController (string channel, Repository repo)
+		{
+			Title = "New Message";
+			
+			_text = new UITextView (View.Bounds) {
+				Font = UIFont.SystemFontOfSize (24),
+			};
+			View.AddSubview (_text);
+			
+			NavigationItem.LeftBarButtonItem = new UIBarButtonItem (
+				UIBarButtonSystemItem.Cancel,
+				delegate {
+					DismissModalViewControllerAnimated (true);
+			});
+			
+			NavigationItem.RightBarButtonItem = new UIBarButtonItem (
+				"Send",
+				UIBarButtonItemStyle.Done,
+				delegate {
+					NavigationItem.RightBarButtonItem.Enabled = false;
+					var message = new Message {
+						ChannelName = channel,
+						PostTime = DateTime.UtcNow,
+						Username = "fak",
+						Text = _text.Text,
+					};
+					repo.Save (message).ContinueWith ((task) => {
+						if (task.IsFaulted) AppDelegate.ShowError ("Send", task.Exception);
+						DismissModalViewControllerAnimated (true);
+					}, new DispatchQueueScheduler ());
+				});
+		}
+		
+		public override void ViewWillAppear (bool animated)
+		{
+			base.ViewWillAppear (animated);
+			_text.BecomeFirstResponder ();
 		}
 	}
 }

@@ -4,17 +4,34 @@ using Rouse;
 
 namespace Chat
 {
-	public class ChannelMessage
+	public class Message : Resource
 	{
+		[PrimaryKey]
+		public string Id { get; set; }
 		public string Username { get; set; }
 		public string Text { get; set; }
-		public string Channel { get; set; }
+		public string ChannelName { get; set; }
 		public DateTime PostTime { get; set; }
 		
-		public ChannelMessage ()
+		public Message ()
 		{
 			Username = "";
 			Text = "";
+			ChannelName = "";
+		}
+	}
+	
+	public class Channel : Resource
+	{
+		[PrimaryKey]
+		public string Name { get; set; }
+	}
+	
+	public class Channels : Query
+	{
+		public override System.Collections.IEnumerable Get (ICollectionFactory collections)
+		{
+			return collections.Get<Channel> ();
 		}
 	}
 	
@@ -33,14 +50,14 @@ namespace Chat
 			Channel = channel;
 		}
 		
-		public override System.Collections.IEnumerable Perform (ICollectionFactory collections)
+		public override System.Collections.IEnumerable Get (ICollectionFactory collections)
 		{
-			var q = from m in collections.Get<ChannelMessage> ()
-					where m.Channel == Channel
+			var q = from m in collections.Get<Message> ()
+					where m.ChannelName == Channel
 					orderby m.PostTime descending
 					select m;
 			return q.Take (20);
 		}
-	}	
+	}
 }
 

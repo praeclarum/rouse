@@ -356,7 +356,7 @@ namespace Rouse.Data
 		{
 			return Task.Factory.StartNew (delegate {
 				lock (_connectionLock) {
-					var e = query.Perform (_collections);
+					var e = query.Get (_collections);
 					return new QueryResult (e);
 				}
 			});
